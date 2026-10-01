@@ -1,0 +1,8 @@
+---
+# Top-level entry point: deploy Stalwart mail server.
+#   ansible-playbook -i inventory/hosts.yml site.yml
+- name: Deploy Stalwart mail server
+  hosts: mailservers
+  become: true
+  roles:
+    - role: stalwart
