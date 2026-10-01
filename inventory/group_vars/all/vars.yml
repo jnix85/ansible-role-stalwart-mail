@@ -1,0 +1,5 @@
+---
+# Connection settings shared by every host.
+ansible_user: osadmin
+# ansible_ssh_private_key_file: ~/.ssh/id_stalwart_azure
+ansible_become: true          # when ansible_user is not root

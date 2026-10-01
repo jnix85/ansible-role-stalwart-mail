@@ -1,0 +1,142 @@
+{#-
+  Declarative configuration for Stalwart >= 0.16, consumed by
+  `stalwart-cli apply`. One JSON operation per line (NDJSON). Objects are
+  matched by stable keys so re-applying is idempotent; "#cid" strings
+  reference objects created or matched earlier in this file.
+-#}
+{%- set ops = [] -%}
+{%- set protocol_map = {'smtp': 'smtp', 'lmtp': 'lmtp', 'imap': 'imap',
+                        'pop3': 'pop3', 'managesieve': 'manageSieve', 'http': 'http'} -%}
+{%- set challenge_map = {'tls-alpn-01': 'TlsAlpn01', 'http-01': 'Http01', 'dns-01': 'Dns01'} -%}
+
+{#- ---- TLS: ACME provider or a certificate from files ---------------- -#}
+{%- if stalwart_tls_mode == 'acme' -%}
+{%-   set _ = ops.append({"@type": "upsert", "object": "AcmeProvider", "matchOn": ["directory"],
+        "value": {"acme": {
+          "directory": stalwart_acme_directory_url,
+          "challengeType": challenge_map[stalwart_acme_challenge],
+          "contact": {("mailto:" ~ stalwart_acme_contact): true}}}}) -%}
+{%-   set extra_sans = {} -%}
+{%-   for d in stalwart_acme_domains if d != stalwart_hostname -%}
+{%-     set _ = extra_sans.update({d: true}) -%}
+{%-   endfor -%}
+{%-   set cert_mgmt = {"@type": "Automatic", "acmeProviderId": "#acme", "subjectAlternativeNames": extra_sans} -%}
+{%-   if stalwart_acme_challenge == 'dns-01' -%}
+{#-     dns-01: Stalwart publishes _acme-challenge TXT records via the DNS
+        provider API; publishRecords limits what else it may publish. -#}
+{%-     set _ = ops.append({"@type": "upsert", "object": "DnsServer", "matchOn": ["description"],
+          "value": {"dns": {
+            "@type": "Cloudflare",
+            "description": "Managed by Ansible (" ~ stalwart_acme_dns_provider ~ ")",
+            "secret": {"@type": "Value", "secret": stalwart_acme_dns_cloudflare_api_token}}}}) -%}
+{%-     set publish = {} -%}
+{%-     for r in stalwart_acme_dns_publish_records -%}
+{%-       set _ = publish.update({r: true}) -%}
+{%-     endfor -%}
+{%-     set dns_mgmt = {"@type": "Automatic", "dnsServerId": "#dns", "publishRecords": publish} -%}
+{%-   endif -%}
+{%- else -%}
+{%-   set _ = ops.append({"@type": "upsert", "object": "Certificate", "matchOn": ["certificate"],
+        "value": {"cert": {
+          "certificate": {"@type": "File", "filePath": stalwart_effective_cert_file},
+          "privateKey": {"@type": "File", "filePath": stalwart_effective_key_file}}}}) -%}
+{%-   set cert_mgmt = {"@type": "Manual"} -%}
+{%- endif -%}
+
+{#- ---- Domains: the server's own hostname (+ relay domains) ---------- -#}
+{%- set domains = {"hostdomain": {
+      "name": stalwart_hostname,
+      "certificateManagement": cert_mgmt,
+      "dkimManagement": {"@type": "Manual"},
+      "dnsManagement": dns_mgmt | default({"@type": "Manual"})}} -%}
+{%- if stalwart_relay_host | length > 0 -%}
+{%-   for d in stalwart_relay_domains if d != stalwart_hostname -%}
+{%-     set _ = domains.update({("relaydomain" ~ loop.index): {
+          "name": d,
+          "allowRelaying": true,
+          "dkimManagement": {"@type": "Manual"},
+          "dnsManagement": {"@type": "Manual"}}}) -%}
+{%-   endfor -%}
+{%- endif -%}
+{%- set _ = ops.append({"@type": "upsert", "object": "Domain", "matchOn": ["name"], "value": domains}) -%}
+
+{#- ---- System settings (singleton) ---------------------------------- -#}
+{%- set system = {"defaultHostname": stalwart_hostname, "defaultDomainId": "#hostdomain"} -%}
+{%- if stalwart_tls_mode != 'acme' -%}
+{%-   set _ = system.update({"defaultCertificateId": "#cert"}) -%}
+{%- endif -%}
+{%- set _ = ops.append({"@type": "update", "object": "SystemSettings", "value": system}) -%}
+
+{#- ---- Listeners: the enabled set plus the management HTTP listener -- -#}
+{%- set listeners = {} -%}
+{%- for l in stalwart_listeners if l.enabled | bool and l.name != 'http' -%}
+{%-   set _ = listeners.update({l.name: {
+        "name": l.name,
+        "bind": {(stalwart_effective_listen_address ~ ':' ~ l.port): true},
+        "protocol": protocol_map[l.protocol],
+        "useTls": true,
+        "tlsImplicit": l.tls_implicit | default(false) | bool}}) -%}
+{%- endfor -%}
+{%- set http_bind = (stalwart_effective_listen_address if stalwart_http_enabled | bool
+                     else stalwart_management_bind_address) ~ ':' ~ stalwart_http_port -%}
+{%- set _ = listeners.update({"http": {
+      "name": "http", "bind": {http_bind: true}, "protocol": "http",
+      "useTls": false, "tlsImplicit": false}}) -%}
+{%- set _ = ops.append({"@type": "reconcile", "object": "NetworkListener", "matchOn": ["name"], "value": listeners}) -%}
+
+{#- ---- Logging ------------------------------------------------------- -#}
+{%- set _ = ops.append({"@type": "reconcile", "object": "Tracer", "matchOn": ["path"],
+      "value": {"log": {
+        "@type": "Log", "path": stalwart_log_dir, "prefix": "stalwart.log",
+        "rotate": stalwart_log_rotate, "level": stalwart_log_level,
+        "ansi": false, "enable": true}}}) -%}
+
+{#- ---- Outbound relay ------------------------------------------------ -#}
+{%- if stalwart_relay_host | length > 0 -%}
+{%-   set relay = {
+        "@type": "Relay", "name": stalwart_relay_route_name,
+        "description": "Managed by Ansible",
+        "address": stalwart_relay_host, "port": stalwart_relay_port | int,
+        "protocol": "smtp",
+        "implicitTls": stalwart_relay_tls_implicit | bool,
+        "allowInvalidCerts": stalwart_relay_allow_invalid_certs | bool} -%}
+{%-   if stalwart_relay_auth_username | length > 0 -%}
+{%-     set _ = relay.update({"authUsername": stalwart_relay_auth_username,
+          "authSecret": {"@type": "Value", "secret": stalwart_relay_auth_password}}) -%}
+{%-   endif -%}
+{%-   set _ = ops.append({"@type": "upsert", "object": "MtaRoute", "matchOn": ["name"], "value": {"relay": relay}}) -%}
+{#-   is_local_domain() is true for relay domains as well (they are Domain
+      objects), so route them to the relay before the local-delivery check. -#}
+{%-   set route_match = {} -%}
+{%-   set relay_domains = stalwart_relay_domains | reject('equalto', stalwart_hostname) | list -%}
+{%-   if relay_domains | length > 0 -%}
+{%-     set relay_cond = [] -%}
+{%-     for d in relay_domains -%}
+{%-       set _ = relay_cond.append("rcpt_domain == '" ~ d ~ "'") -%}
+{%-     endfor -%}
+{%-     set _ = route_match.update({"0": {"if": relay_cond | join(' || '),
+                                          "then": "'" ~ stalwart_relay_route_name ~ "'"}}) -%}
+{%-   endif -%}
+{%-   set _ = route_match.update({(route_match | length | string): {
+          "if": "is_local_domain(rcpt_domain)", "then": "'local'"}}) -%}
+{%-   set _ = ops.append({"@type": "update", "object": "MtaOutboundStrategy", "value": {
+        "route": {"match": route_match, "else": "'" ~ stalwart_relay_route_name ~ "'"}}}) -%}
+{%- endif -%}
+
+{#- ---- Administrator account ---------------------------------------- -#}
+{%- if stalwart_admin_create_account | bool -%}
+{%-   set _ = ops.append({"@type": "upsert", "object": "Account", "matchOn": ["name", "domainId"],
+        "value": {"admin": {
+          "@type": "User", "name": stalwart_admin_user, "domainId": "#hostdomain",
+          "description": "Administrator (managed by Ansible)",
+          "roles": {"@type": "Admin"},
+          "credentials": {"0": {"@type": "Password", "secret": stalwart_admin_secret_hash}}}}}) -%}
+{%- endif -%}
+
+{#- ---- Escape hatch -------------------------------------------------- -#}
+{%- for op in stalwart_extra_plan_ops -%}
+{%-   set _ = ops.append(op) -%}
+{%- endfor -%}
+{%- for op in ops %}
+{{ op | to_json }}
+{% endfor -%}

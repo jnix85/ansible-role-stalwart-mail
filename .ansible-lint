@@ -1,0 +1,11 @@
+---
+profile: production
+
+exclude_paths:
+  - .cache/
+  - .ansible/
+
+# The role lives at roles/stalwart and is published to Galaxy as
+# jnix85.stalwart_mail_server (see roles/stalwart/meta/main.yml).
+skip_list:
+  - role-name

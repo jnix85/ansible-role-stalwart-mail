@@ -1,0 +1,69 @@
+*.retry
+.cache/
+.molecule/
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+.ansible/
+# Ansible Vault secrets (keep the .example template)
+inventory/group_vars/*/vault.yml
+inventory/group_vars/*/vault.yaml
+.vault_pass
+
+# ==============================================================================
+# AI Assistants, Agents & Tooling
+# ==============================================================================
+# Claude Code / Anthropic
+.claude/
+CLAUDE.local.md
+
+# Cursor AI
+.cursor/
+.cursorrules
+.cursorignore
+.cursorindexingignore
+
+# Aider
+.aider*
+.aider.input.history
+.aider.chat.history.md
+.aider.llm.history
+.aider.tags.cache.v*
+
+# Google Gemini / Antigravity
+.gemini/
+gemini-debug.log
+.gemini-clipboard/
+
+# OpenAI / Codex / ChatGPT
+.codex/
+.openai/
+
+# Cline / Roo-Cline
+.cline/
+.clinerules
+cline_docs/
+
+# Continue
+.continue/
+.continuerc.json
+
+# Windsurf
+.windsurf/
+.windsurfrules
+
+# Serena MCP, comP & CodeSight
+.serena/
+.comp/
+.codesight/
+.agents/
+
+# Other AI dev tools
+.warp/
+.crush/
+.codeium/
+.deepseek/
+.amazon-codewhisperer/
+.tabnine/
+.tabnineignore

@@ -1,0 +1,325 @@
+---
+# ------------------------------------------------------------------
+# Version / download
+# ------------------------------------------------------------------
+
+# Stalwart release to install (git tag without the leading "v").
+# Must be >= 0.16: this role deploys the 0.16 configuration model
+# (a JSON datastore descriptor plus a declarative plan applied through
+# stalwart-cli). For 0.15 and older use a previous release of the role.
+stalwart_version: "0.16.9"
+
+# GitHub repository releases are downloaded from.
+stalwart_github_repo: stalwartlabs/stalwart
+
+# Map ansible_architecture to the release target triple architecture.
+stalwart_arch_map:
+  x86_64: x86_64
+  aarch64: aarch64
+
+# libc flavour of the release binary: gnu or musl.
+stalwart_libc: gnu
+
+# Candidate download URLs, probed in order at install time; the first
+# one that responds is used.
+stalwart_download_urls:
+  - >-
+    https://github.com/{{ stalwart_github_repo }}/releases/download/v{{ stalwart_version }}/stalwart-{{
+    stalwart_arch_map[ansible_architecture] | default(ansible_architecture) }}-unknown-linux-{{ stalwart_libc }}.tar.gz
+
+# Explicit URL override (internal mirror, exotic asset name). When set,
+# it is used directly and the candidate list above is ignored.
+stalwart_download_url: ""
+
+# Optional checksum for the downloaded tarball, e.g. "sha256:abcd...".
+stalwart_download_checksum: ""
+
+# stalwart-cli is required: since 0.16 every setting other than the
+# datastore lives in the database and is managed through the JMAP API,
+# which the role drives with `stalwart-cli apply`. The CLI is released
+# separately (github.com/stalwartlabs/cli) with its own version line.
+stalwart_cli_version: "1.0.12"
+stalwart_cli_github_repo: stalwartlabs/cli
+stalwart_cli_download_urls:
+  - >-
+    https://github.com/{{ stalwart_cli_github_repo }}/releases/download/v{{ stalwart_cli_version }}/stalwart-cli-{{
+    stalwart_arch_map[ansible_architecture] | default(ansible_architecture) }}-unknown-linux-{{ stalwart_libc }}.tar.xz
+# Explicit override for the CLI tarball, same semantics as
+# stalwart_download_url.
+stalwart_cli_download_url: ""
+
+# ------------------------------------------------------------------
+# Install layout / service
+# ------------------------------------------------------------------
+
+stalwart_install_dir: /opt/stalwart
+stalwart_user: stalwart
+stalwart_group: stalwart
+stalwart_service_name: stalwart
+stalwart_service_enabled: true
+stalwart_service_state: started
+
+# ------------------------------------------------------------------
+# Identity
+# ------------------------------------------------------------------
+
+# Fully qualified hostname the server identifies as (EHLO, certs, ...).
+# The role also creates a Domain object with this name: it carries the
+# server certificate and is the home domain of the admin account.
+stalwart_hostname: "{{ ansible_fqdn }}"
+
+# ------------------------------------------------------------------
+# Administrator account (REQUIRED)
+# ------------------------------------------------------------------
+
+stalwart_admin_user: admin
+
+# REQUIRED: supply via Ansible Vault. The role fails fast when unset.
+# Stored on the host only as a SHA512-crypt hash, in two places:
+#   - STALWART_RECOVERY_ADMIN in the service environment file. Stalwart
+#     accepts this "fallback admin" at any time (not just in recovery
+#     mode), so the role can always reach the management API.
+#   - a permanent Account object (<stalwart_admin_user>@<stalwart_hostname>
+#     with the Admin role), created when stalwart_admin_create_account is
+#     true, so an administrator exists even if the environment variable
+#     is removed later.
+stalwart_admin_password: ""
+stalwart_admin_create_account: true
+
+# ------------------------------------------------------------------
+# TLS
+# ------------------------------------------------------------------
+
+# One of: acme | files | selfsigned
+#   acme       - Stalwart obtains certificates itself (Let's Encrypt).
+#   files      - use existing certificate/key files on the host.
+#   selfsigned - role generates a self-signed certificate (labs/testing).
+stalwart_tls_mode: selfsigned
+
+# --- acme ---
+stalwart_acme_directory_url: "https://acme-v02.api.letsencrypt.org/directory"
+# tls-alpn-01 requires port 443 to be reachable from the internet.
+stalwart_acme_challenge: tls-alpn-01
+stalwart_acme_contact: "postmaster@{{ stalwart_hostname }}"
+# Names on the certificate. stalwart_hostname is always included.
+stalwart_acme_domains:
+  - "{{ stalwart_hostname }}"
+
+# --- acme + dns-01 ---
+# dns-01 needs Stalwart to publish the _acme-challenge TXT record itself,
+# through a DNS provider API. Supported here: cloudflare (API token with
+# Zone:DNS:Edit on the zone). Set stalwart_acme_challenge: dns-01 and
+# supply the token via Vault. Only the challenge record is published;
+# MX/SPF/DMARC etc. for the hostname stay manual.
+stalwart_acme_dns_provider: cloudflare
+stalwart_acme_dns_cloudflare_api_token: ""
+# Record types Stalwart may publish for the hostname domain besides the
+# ACME challenge (at least one is required by Stalwart). Options: caa, mx,
+# spf, dmarc, dkim, tlsa, srv. CAA (issuer pinning) is the harmless default.
+stalwart_acme_dns_publish_records:
+  - caa
+
+# --- files ---
+# Absolute paths on the managed host; must be readable by {{ stalwart_user }}.
+# Stalwart re-reads the files when it (re)loads certificates, so renewals
+# need a restart (or a "ReloadTlsCertificates" action).
+stalwart_tls_cert_file: ""
+stalwart_tls_key_file: ""
+
+# --- selfsigned ---
+stalwart_selfsigned_dir: "{{ stalwart_install_dir }}/etc/certs"
+stalwart_selfsigned_days: 3650
+
+# ------------------------------------------------------------------
+# Storage (the datastore, i.e. config.json)
+# ------------------------------------------------------------------
+
+# One of: rocksdb | sqlite | postgresql
+stalwart_storage_backend: rocksdb
+
+stalwart_data_dir: "{{ stalwart_install_dir }}/data"
+
+# postgresql backend settings (the role does NOT install PostgreSQL).
+stalwart_postgresql_host: localhost
+stalwart_postgresql_port: 5432
+stalwart_postgresql_database: stalwart
+stalwart_postgresql_user: stalwart
+stalwart_postgresql_password: ""
+stalwart_postgresql_use_tls: false
+
+# ------------------------------------------------------------------
+# Listeners
+# ------------------------------------------------------------------
+
+# Address to bind listeners on.
+#   auto      - "[::]" (all v6+v4, dual-stack) when the host has IPv6,
+#               "0.0.0.0" when IPv6 is disabled (e.g. ipv6.disable=1).
+#   "[::]", "0.0.0.0", or a specific address - used as-is.
+stalwart_listen_address: auto
+
+stalwart_smtp_enabled: true
+stalwart_smtp_port: 25
+
+stalwart_submission_enabled: true
+stalwart_submission_port: 587
+
+stalwart_submissions_enabled: true
+stalwart_submissions_port: 465
+
+stalwart_imap_enabled: true
+stalwart_imap_port: 143
+
+stalwart_imaps_enabled: true
+stalwart_imaps_port: 993
+
+stalwart_pop3_enabled: false
+stalwart_pop3_port: 110
+stalwart_pop3s_port: 995
+
+stalwart_managesieve_enabled: false
+stalwart_managesieve_port: 4190
+
+# HTTPS listener: JMAP, REST API and the web admin UI.
+stalwart_https_enabled: true
+stalwart_https_port: 443
+
+# Plaintext HTTP listener. It always exists because the role manages the
+# server through it: when stalwart_http_enabled is false it is bound to
+# stalwart_management_bind_address only (loopback); when true it is bound
+# on stalwart_listen_address like the other listeners (for reverse
+# proxies or http-01 ACME challenges).
+stalwart_http_enabled: false
+stalwart_http_port: 8080
+stalwart_management_bind_address: 127.0.0.1
+
+# Single source of truth for listeners, derived from the toggles above.
+# The plan template, firewall rules and smoke test all iterate this
+# list, so the definitions can never drift apart. Override it entirely
+# to add custom listeners (fields: name, protocol, enabled, port, and
+# optional tls_implicit). Protocols: smtp, lmtp, imap, pop3, managesieve,
+# http.
+stalwart_listeners:
+  - name: smtp
+    protocol: smtp
+    enabled: "{{ stalwart_smtp_enabled }}"
+    port: "{{ stalwart_smtp_port }}"
+  - name: submission
+    protocol: smtp
+    enabled: "{{ stalwart_submission_enabled }}"
+    port: "{{ stalwart_submission_port }}"
+  - name: submissions
+    protocol: smtp
+    enabled: "{{ stalwart_submissions_enabled }}"
+    port: "{{ stalwart_submissions_port }}"
+    tls_implicit: true
+  - name: imap
+    protocol: imap
+    enabled: "{{ stalwart_imap_enabled }}"
+    port: "{{ stalwart_imap_port }}"
+  - name: imaptls
+    protocol: imap
+    enabled: "{{ stalwart_imaps_enabled }}"
+    port: "{{ stalwart_imaps_port }}"
+    tls_implicit: true
+  - name: pop3
+    protocol: pop3
+    enabled: "{{ stalwart_pop3_enabled }}"
+    port: "{{ stalwart_pop3_port }}"
+  - name: pop3s
+    protocol: pop3
+    enabled: "{{ stalwart_pop3_enabled }}"
+    port: "{{ stalwart_pop3s_port }}"
+    tls_implicit: true
+  - name: sieve
+    protocol: managesieve
+    enabled: "{{ stalwart_managesieve_enabled }}"
+    port: "{{ stalwart_managesieve_port }}"
+  - name: https
+    protocol: http
+    enabled: "{{ stalwart_https_enabled }}"
+    port: "{{ stalwart_https_port }}"
+    tls_implicit: true
+  - name: http
+    protocol: http
+    enabled: "{{ stalwart_http_enabled }}"
+    port: "{{ stalwart_http_port }}"
+
+# ------------------------------------------------------------------
+# Logging
+# ------------------------------------------------------------------
+
+# error | warn | info | debug | trace
+stalwart_log_level: info
+stalwart_log_dir: "{{ stalwart_install_dir }}/logs"
+# daily | hourly | minutely | never
+stalwart_log_rotate: daily
+
+# ------------------------------------------------------------------
+# Outbound relay (MX edge / smarthost)
+# ------------------------------------------------------------------
+
+# When stalwart_relay_host is set, all mail for non-local domains is
+# routed to that host instead of being delivered via MX lookup. Use it
+# on inbound-only MX edges to forward accepted mail to the mailbox
+# server, or to send everything through a smarthost.
+stalwart_relay_host: ""
+stalwart_relay_port: 25
+stalwart_relay_route_name: relay
+stalwart_relay_tls_implicit: false
+stalwart_relay_allow_invalid_certs: false
+stalwart_relay_auth_username: ""
+stalwart_relay_auth_password: ""
+
+# Domains this server accepts mail for and forwards to the relay (they
+# are created as Domain objects with "allow relaying" enabled). Only
+# meaningful together with stalwart_relay_host.
+stalwart_relay_domains: []
+
+# ------------------------------------------------------------------
+# Firewall (opt-in)
+# ------------------------------------------------------------------
+
+# When true, opens the enabled listener ports via ufw (Debian family)
+# or firewalld (RedHat family). The role never enables/activates the
+# firewall itself to avoid locking you out — see README.
+stalwart_manage_firewall: false
+
+# ------------------------------------------------------------------
+# Post-install smoke test
+# ------------------------------------------------------------------
+
+# After deployment, verify the service is active, enabled listeners
+# accept connections, and the HTTP health endpoint responds.
+stalwart_smoke_test: true
+
+# Address the smoke test connects to. Change this when
+# stalwart_listen_address binds a specific (non-wildcard) address.
+stalwart_smoke_test_host: 127.0.0.1
+
+# ------------------------------------------------------------------
+# Plan application
+# ------------------------------------------------------------------
+
+# The role renders its settings into an NDJSON plan and applies it with
+# `stalwart-cli apply` whenever the rendered plan changes (or on first
+# install). Set this to true to apply the plan on every run, which also
+# reverts changes made in the web admin to the objects the role owns.
+stalwart_plan_always_apply: false
+
+# Seconds to wait for the management listener before applying.
+stalwart_plan_wait_timeout: 90
+
+# In ACME mode, seconds to wait after applying for the certificate task
+# to finish before the service is restarted (a restart mid-task delays
+# issuance by up to an hour while the task lock expires).
+stalwart_acme_task_wait_timeout: 120
+
+# ------------------------------------------------------------------
+# Escape hatch
+# ------------------------------------------------------------------
+
+# Extra plan operations appended verbatim to the role's plan, one
+# `stalwart-cli apply` operation (a dict) per list item, e.g.
+#   - {"@type": "update", "object": "Jmap", "value": {"maxSizeUpload": 104857600}}
+# See https://stalw.art/docs for the object schema (`stalwart-cli describe`).
+stalwart_extra_plan_ops: []

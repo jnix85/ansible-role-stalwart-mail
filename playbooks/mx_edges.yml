@@ -1,0 +1,8 @@
+---
+# Inbound-only MX relays. Same role; the listener/relay settings come
+# from inventory/group_vars/mx_edges/vars.yml.
+- name: Deploy Stalwart MX edge relays
+  hosts: mx_edges
+  become: true
+  roles:
+    - role: stalwart

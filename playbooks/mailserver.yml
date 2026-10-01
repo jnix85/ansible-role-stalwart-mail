@@ -1,0 +1,8 @@
+---
+# Deploys Stalwart to every host in the mailservers group. All settings
+# live in inventory/group_vars/ — this playbook only binds the role.
+- name: Deploy Stalwart mail server
+  hosts: mailservers
+  become: true
+  roles:
+    - role: stalwart

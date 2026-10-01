@@ -1,0 +1,18 @@
+---
+# Replace the example hosts with your own. The playbooks target the
+# `mailservers` parent group; the child groups carry per-role settings
+# in inventory/group_vars/<group>/vars.yml.
+all:
+  children:
+    mailservers:
+      children:
+        mx_edges:
+          # Inbound-only MX relays: accept on port 25, forward to the
+          # mailbox server. Publish these as your MX records.
+          hosts:
+            mx01.clawduino.com:
+            mx02.clawduino.com:
+        mailbox_servers:
+          # The full mail server users connect to (IMAP/JMAP/submission).
+          hosts:
+            mail.clawduino.com:

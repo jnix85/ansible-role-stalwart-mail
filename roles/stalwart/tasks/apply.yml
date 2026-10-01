@@ -1,0 +1,106 @@
+---
+# Push the rendered plan into the datastore through the management API.
+# Runs when the plan changed (or on demand); the server is restarted
+# afterwards so listener changes take effect.
+- name: Apply pending restart before applying the plan
+  ansible.builtin.meta: flush_handlers
+
+- name: Apply configuration plan
+  when: >-
+    stalwart_plan_template is changed
+    or stalwart_plan_always_apply | bool
+    or stalwart_plan_force_apply | default(false) | bool
+  block:
+    - name: Wait for the management listener
+      ansible.builtin.wait_for:
+        host: "{{ stalwart_management_url | urlsplit('hostname') }}"
+        port: "{{ stalwart_management_url | urlsplit('port') }}"
+        timeout: "{{ stalwart_plan_wait_timeout }}"
+
+    - name: Wait for the management API to answer
+      ansible.builtin.uri:
+        url: "{{ stalwart_management_url }}/healthz/live"
+        status_code: 200
+      register: stalwart_management_health
+      retries: "{{ (stalwart_plan_wait_timeout | int / 3) | round(0, 'ceil') | int }}"
+      delay: 3
+      until: stalwart_management_health.status == 200
+
+    - name: Apply plan with stalwart-cli
+      ansible.builtin.command:
+        argv:
+          - "{{ stalwart_install_dir }}/bin/stalwart-cli"
+          - --url
+          - "{{ stalwart_management_url }}"
+          - --no-color
+          - apply
+          - --file
+          - "{{ stalwart_install_dir }}/etc/plan.ndjson"
+          - --json
+          - --continue-on-error
+      # Credentials travel via the environment, which Ansible does not echo.
+      environment:
+        STALWART_USER: "{{ stalwart_admin_user }}"
+        STALWART_PASSWORD: "{{ stalwart_admin_password }}"
+      register: stalwart_plan_apply
+      changed_when: true
+
+    - name: Parse plan summary
+      ansible.builtin.set_fact:
+        stalwart_plan_summary: >-
+          {{ (stalwart_plan_apply.stdout_lines | last | default('{}') | from_json).done
+             | default({}) }}
+
+    - name: Report plan result
+      ansible.builtin.debug:
+        msg: >-
+          stalwart-cli apply: {{ stalwart_plan_summary.created | default(0) }} created,
+          {{ stalwart_plan_summary.updated | default(0) }} updated,
+          {{ stalwart_plan_summary.destroyed | default(0) }} destroyed,
+          {{ stalwart_plan_summary.failed | default(0) }} failed.
+
+    # Creating/changing an ACME-managed domain schedules a certificate task
+    # right away. Restarting while it runs leaves its lock behind (Stalwart
+    # expires task locks after an hour), so give it a moment to finish.
+    - name: Wait for the ACME certificate task to finish
+      ansible.builtin.command:
+        argv:
+          - "{{ stalwart_install_dir }}/bin/stalwart-cli"
+          - --url
+          - "{{ stalwart_management_url }}"
+          - --no-color
+          - query
+          - Task
+          - --json
+      environment:
+        STALWART_USER: "{{ stalwart_admin_user }}"
+        STALWART_PASSWORD: "{{ stalwart_admin_password }}"
+      register: stalwart_pending_tasks
+      changed_when: false
+      failed_when: false
+      retries: "{{ (stalwart_acme_task_wait_timeout | int / 5) | round(0, 'ceil') | int }}"
+      delay: 5
+      until: >-
+        stalwart_pending_tasks.rc != 0
+        or 'AcmeRenewal' not in stalwart_pending_tasks.stdout
+      when: stalwart_tls_mode == 'acme'
+
+    - name: Restart Stalwart to activate the applied plan
+      ansible.builtin.systemd_service:
+        name: "{{ stalwart_service_name }}"
+        state: restarted
+  rescue:
+    - name: Show stalwart-cli output
+      ansible.builtin.debug:
+        msg: >-
+          {{ ((stalwart_plan_apply.stderr_lines | default([]))
+              + (stalwart_plan_apply.stdout_lines | default([])))
+             | map('regex_replace', '\\$6\\$[^\"\\s]+', '<hash>') | list }}
+      when: stalwart_plan_apply is defined
+
+    - name: Fail the play
+      ansible.builtin.fail:
+        msg: >-
+          Applying the Stalwart configuration plan failed. Check the output
+          above and 'journalctl -u {{ stalwart_service_name }}' on the host.
+          Re-run with -e stalwart_plan_force_apply=true after fixing the cause.

@@ -1,0 +1,12 @@
+---
+# Re-run only the post-install verification (service, listeners,
+# health endpoint) without changing anything.
+#   ansible-playbook playbooks/smoke.yml --ask-vault-pass
+- name: Verify Stalwart is healthy
+  hosts: mailservers
+  become: true
+  tasks:
+    - name: Run the role's smoke test
+      ansible.builtin.include_role:
+        name: stalwart
+        tasks_from: smoke

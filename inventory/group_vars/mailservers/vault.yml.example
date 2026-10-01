@@ -1,0 +1,8 @@
+---
+# Copy to vault.yml, set a real password (min 12 chars), then encrypt:
+#   cp vault.yml.example vault.yml
+#   $EDITOR vault.yml
+#   ansible-vault encrypt vault.yml
+vault_stalwart_admin_password: WIZ@rfd0ozFKwngtehCH3G
+# Cloudflare API token with Zone:DNS:Edit on the mail zone (ACME dns-01).
+vault_cloudflare_api_token: cf-token-here

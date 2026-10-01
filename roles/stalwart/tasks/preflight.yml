@@ -1,0 +1,117 @@
+---
+- name: Assert supported platform
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family in ['Debian', 'RedHat']
+      - ansible_service_mgr == 'systemd'
+      - ansible_architecture in stalwart_arch_map
+    fail_msg: >-
+      This role supports systemd-based Debian/RedHat family hosts on
+      {{ stalwart_arch_map.keys() | join('/') }} only
+      (got {{ ansible_os_family }}/{{ ansible_service_mgr }}/{{ ansible_architecture }}).
+
+- name: Assert Stalwart version is supported
+  ansible.builtin.assert:
+    that:
+      - stalwart_version is version('0.16.0', '>=')
+    fail_msg: >-
+      This role deploys the Stalwart 0.16 configuration model (config.json +
+      stalwart-cli apply). stalwart_version={{ stalwart_version }} is too old;
+      use a previous release of the role for 0.15 and earlier.
+
+- name: Assert admin password is provided
+  ansible.builtin.assert:
+    that:
+      - stalwart_admin_password is defined
+      - stalwart_admin_password | length >= 12
+    fail_msg: >-
+      stalwart_admin_password must be set (>= 12 characters).
+      Supply it via Ansible Vault; it is stored on the host only as a hash.
+    quiet: true
+
+- name: Assert TLS configuration is valid
+  ansible.builtin.assert:
+    that:
+      - stalwart_tls_mode in ['acme', 'files', 'selfsigned']
+    fail_msg: "stalwart_tls_mode must be one of: acme, files, selfsigned."
+
+- name: Assert ACME settings
+  ansible.builtin.assert:
+    that:
+      - stalwart_acme_domains | length > 0
+      - stalwart_acme_contact | length > 0
+      - stalwart_acme_challenge in ['tls-alpn-01', 'http-01', 'dns-01']
+      - >-
+        not (stalwart_acme_challenge == 'tls-alpn-01'
+             and not (stalwart_https_enabled and stalwart_https_port | int == 443))
+      - >-
+        not (stalwart_acme_challenge == 'http-01'
+             and not (stalwart_http_enabled and stalwart_http_port | int == 80))
+    fail_msg: >-
+      ACME mode needs stalwart_acme_domains, stalwart_acme_contact and a valid
+      challenge type. Let's Encrypt validates tls-alpn-01 only on port 443
+      (requires stalwart_https_enabled with stalwart_https_port 443) and
+      http-01 only on port 80 (requires stalwart_http_enabled with
+      stalwart_http_port 80).
+  when: stalwart_tls_mode == 'acme'
+
+- name: Assert ACME dns-01 settings
+  ansible.builtin.assert:
+    that:
+      - stalwart_acme_dns_provider in ['cloudflare']
+      - stalwart_acme_dns_cloudflare_api_token | length > 0
+    fail_msg: >-
+      ACME challenge dns-01 requires stalwart_acme_dns_provider (cloudflare)
+      and stalwart_acme_dns_cloudflare_api_token (supply via Ansible Vault).
+    quiet: true
+  when:
+    - stalwart_tls_mode == 'acme'
+    - stalwart_acme_challenge == 'dns-01'
+
+- name: Assert certificate file settings
+  ansible.builtin.assert:
+    that:
+      - stalwart_tls_cert_file | length > 0
+      - stalwart_tls_key_file | length > 0
+    fail_msg: >-
+      TLS mode "files" requires stalwart_tls_cert_file and stalwart_tls_key_file.
+  when: stalwart_tls_mode == 'files'
+
+- name: Assert storage configuration is valid
+  ansible.builtin.assert:
+    that:
+      - stalwart_storage_backend in ['rocksdb', 'sqlite', 'postgresql']
+    fail_msg: "stalwart_storage_backend must be one of: rocksdb, sqlite, postgresql."
+
+- name: Assert PostgreSQL settings
+  ansible.builtin.assert:
+    that:
+      - stalwart_postgresql_password | length > 0
+    fail_msg: >-
+      Storage backend "postgresql" requires stalwart_postgresql_password
+      (the role does not install or manage the PostgreSQL server itself).
+    quiet: true
+  when: stalwart_storage_backend == 'postgresql'
+
+- name: Assert listener definitions are valid
+  ansible.builtin.assert:
+    that:
+      - stalwart_listeners | map(attribute='protocol') | difference(stalwart_supported_protocols) | length == 0
+      - stalwart_listeners | selectattr('name', 'equalto', 'http') | length == 1
+    fail_msg: >-
+      stalwart_listeners entries must use one of the protocols
+      {{ stalwart_supported_protocols | join(', ') }} and must keep exactly one
+      listener named "http" (the role manages the server through it).
+  vars:
+    stalwart_supported_protocols: [smtp, lmtp, imap, pop3, managesieve, http]
+
+- name: Assert relay settings
+  ansible.builtin.assert:
+    that:
+      - stalwart_relay_port | int > 0
+      - stalwart_relay_route_name | length > 0
+      - stalwart_relay_route_name not in ['mx', 'local']
+    fail_msg: >-
+      stalwart_relay_host requires a valid stalwart_relay_port and a
+      stalwart_relay_route_name other than the built-in "mx"/"local" routes.
+  when: stalwart_relay_host | length > 0

@@ -1,0 +1,43 @@
+---
+# Stalwart settings common to every mail host (MX edges and mailbox
+# servers). Child groups override individual keys. Secrets live in
+# vault.yml (encrypted) next to this file.
+
+# The FQDN the server identifies as (EHLO, certificates, web admin).
+stalwart_hostname: "{{ inventory_hostname }}"
+
+# From vault.yml — never put the real password here.
+stalwart_admin_password: "{{ vault_stalwart_admin_password }}"
+
+# Pin the releases; bump to upgrade in place. stalwart-cli is released
+# separately (github.com/stalwartlabs/cli) and drives the configuration.
+stalwart_version: "0.16.9"
+stalwart_cli_version: "1.0.12"
+
+# --- TLS -----------------------------------------------------------
+# Production: Stalwart obtains Let's Encrypt certificates itself.
+# Requires the hostname to resolve to this host and port 443 reachable
+# from the internet. For a lab box use: stalwart_tls_mode: selfsigned
+stalwart_tls_mode: acme
+# dns-01 via the Cloudflare API: works even when port 443 is not reachable
+# from the internet. Token (Zone:DNS:Edit on the zone) comes from vault.yml.
+stalwart_acme_challenge: dns-01
+stalwart_acme_dns_provider: cloudflare
+stalwart_acme_dns_cloudflare_api_token: "{{ vault_cloudflare_api_token | default('') }}"
+stalwart_acme_contact: "admin@{{ mail_domain }}"
+stalwart_acme_domains:
+  - "{{ inventory_hostname }}"
+
+# --- Storage -------------------------------------------------------
+# rocksdb (default, embedded) | sqlite | postgresql
+stalwart_storage_backend: rocksdb
+
+# --- Firewall ------------------------------------------------------
+# Open the enabled listener ports (never activates the firewall itself).
+stalwart_manage_firewall: true
+
+# --- Site-level values used by the group vars below ----------------
+# Primary mail domain (used for the ACME contact and the MX relay hop).
+mail_domain: clawduino.com
+# The mailbox server MX edges forward accepted mail to.
+mailbox_server_fqdn: mail.clawduino.com

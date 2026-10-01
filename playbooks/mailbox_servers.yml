@@ -1,0 +1,7 @@
+---
+# The full mailbox server(s): SMTP, submission, IMAP, JMAP, web admin.
+- name: Deploy Stalwart mailbox servers
+  hosts: mailbox_servers
+  become: true
+  roles:
+    - role: stalwart

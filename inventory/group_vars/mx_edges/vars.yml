@@ -1,0 +1,20 @@
+---
+# Inbound MX only: port 25 plus HTTPS. HTTPS stays on because ACME
+# (tls-alpn-01) needs 443 and it serves the admin UI — restrict 443 to
+# your management network at the network edge.
+stalwart_smtp_enabled: true
+stalwart_submission_enabled: false
+stalwart_submissions_enabled: false
+stalwart_imap_enabled: false
+stalwart_imaps_enabled: false
+stalwart_pop3_enabled: false
+stalwart_managesieve_enabled: false
+stalwart_https_enabled: true
+
+# Accept mail for the mail domain and forward it to the mailbox server
+# instead of storing it locally.
+stalwart_relay_host: "{{ mailbox_server_fqdn }}"
+stalwart_relay_port: 25
+stalwart_relay_tls_implicit: false
+stalwart_relay_domains:
+  - "{{ mail_domain }}"

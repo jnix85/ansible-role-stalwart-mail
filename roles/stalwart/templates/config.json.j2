@@ -1,0 +1,15 @@
+{#- Stalwart >= 0.16 bootstrap file: a single DataStore object (JSON).
+    Everything else lives in the datastore and is applied via plan.ndjson. -#}
+{%- if stalwart_storage_backend == 'rocksdb' -%}
+{{ {"@type": "RocksDb", "path": stalwart_data_dir} | to_nice_json }}
+{%- elif stalwart_storage_backend == 'sqlite' -%}
+{{ {"@type": "Sqlite", "path": stalwart_data_dir ~ '/index.sqlite3'} | to_nice_json }}
+{%- elif stalwart_storage_backend == 'postgresql' -%}
+{{ {"@type": "PostgreSql",
+    "host": stalwart_postgresql_host,
+    "port": stalwart_postgresql_port | int,
+    "database": stalwart_postgresql_database,
+    "authUsername": stalwart_postgresql_user,
+    "authSecret": {"@type": "Value", "secret": stalwart_postgresql_password},
+    "useTls": stalwart_postgresql_use_tls | bool} | to_nice_json }}
+{%- endif %}

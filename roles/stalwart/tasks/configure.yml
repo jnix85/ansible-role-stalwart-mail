@@ -1,0 +1,87 @@
+---
+# The admin password is hashed on the target with a salt derived
+# deterministically from the password itself, so repeated runs produce
+# the same hash and the rendered files stay idempotent.
+- name: Hash administrator password
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - passwd
+      - "-6"
+      - -salt
+      - "{{ (stalwart_admin_password ~ stalwart_hostname) | hash('sha256') | truncate(16, true, '') }}"
+      - -stdin
+    stdin: "{{ stalwart_admin_password }}"
+  register: stalwart_admin_hash_result
+  changed_when: false
+  no_log: true
+
+- name: Set admin secret hash fact
+  ansible.builtin.set_fact:
+    stalwart_admin_secret_hash: "{{ stalwart_admin_hash_result.stdout | trim }}"
+  no_log: true
+
+# "auto" binds dual-stack when the host has IPv6, IPv4-only otherwise
+# (hosts booted with ipv6.disable=1 cannot bind "[::]" at all).
+- name: Resolve listener bind address
+  ansible.builtin.set_fact:
+    stalwart_effective_listen_address: >-
+      {{ stalwart_listen_address if stalwart_listen_address != 'auto'
+         else ('[::]' if ansible_all_ipv6_addresses | default([]) | length > 0
+               else '0.0.0.0') }}
+
+- name: Resolve TLS certificate paths
+  ansible.builtin.set_fact:
+    stalwart_effective_cert_file: >-
+      {{ stalwart_tls_cert_file if stalwart_tls_mode == 'files'
+         else stalwart_selfsigned_dir ~ '/cert.pem' }}
+    stalwart_effective_key_file: >-
+      {{ stalwart_tls_key_file if stalwart_tls_mode == 'files'
+         else stalwart_selfsigned_dir ~ '/key.pem' }}
+  when: stalwart_tls_mode in ['files', 'selfsigned']
+
+# Host the management API is reached on. The http listener is bound to
+# the loopback management address unless it is publicly enabled.
+- name: Resolve management URL
+  ansible.builtin.set_fact:
+    stalwart_management_url: >-
+      http://{{ stalwart_smoke_test_host if stalwart_http_enabled | bool
+                else stalwart_management_bind_address }}:{{ stalwart_http_port }}
+
+- name: Remove legacy pre-0.16 configuration
+  ansible.builtin.file:
+    path: "{{ stalwart_install_dir }}/etc/{{ item }}"
+    state: absent
+  loop:
+    - config.toml
+    - acme
+
+- name: Template datastore descriptor (config.json)
+  ansible.builtin.template:
+    src: config.json.j2
+    dest: "{{ stalwart_install_dir }}/etc/config.json"
+    owner: "{{ stalwart_user }}"
+    group: "{{ stalwart_group }}"
+    mode: "0600"
+  diff: false
+  notify: Restart stalwart
+
+- name: Template service environment file
+  ansible.builtin.template:
+    src: stalwart.env.j2
+    dest: "{{ stalwart_install_dir }}/etc/stalwart.env"
+    owner: root
+    group: root
+    mode: "0600"
+  diff: false
+  notify: Restart stalwart
+
+- name: Template configuration plan
+  ansible.builtin.template:
+    src: plan.ndjson.j2
+    dest: "{{ stalwart_install_dir }}/etc/plan.ndjson"
+    owner: root
+    group: root
+    mode: "0600"
+  diff: false
+  register: stalwart_plan_template

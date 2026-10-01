@@ -1,0 +1,20 @@
+---
+# Full mailbox server: everything users and the MX edges talk to.
+stalwart_smtp_enabled: true
+stalwart_submission_enabled: true
+stalwart_submissions_enabled: true
+stalwart_imap_enabled: true
+stalwart_imaps_enabled: true
+stalwart_https_enabled: true
+
+# Sieve filtering from mail clients (port 4190).
+stalwart_managesieve_enabled: true
+
+# POP3 is off by default; enable if you have legacy clients.
+stalwart_pop3_enabled: false
+
+# Also request a cert for the bare mail domain if it points here
+# (autodiscover / JMAP well-known). Uncomment to use:
+# stalwart_acme_domains:
+#   - "{{ inventory_hostname }}"
+#   - "{{ mail_domain }}"
